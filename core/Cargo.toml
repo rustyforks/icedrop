@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "icedrop-core",
+  "icedrop-wrapper",
   "icedrop-server",
   "icedrop-sender"
 ]

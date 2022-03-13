@@ -10,6 +10,8 @@ use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
+type FrameTuple = (u16, Vec<u8>);
+
 impl Stream for TcpStream {}
 
 #[async_trait]
@@ -18,7 +20,7 @@ trait AnyFrameHandler {
         &mut self,
         frame_type: u16,
         stream: &mut TcpStream,
-    ) -> Option<Result<(u16, Vec<u8>), Box<dyn Error + Send>>>;
+    ) -> Option<Result<FrameTuple, Box<dyn Error + Send>>>;
 }
 
 struct AnyFrameHandlerImpl<H>
@@ -37,7 +39,7 @@ where
         &mut self,
         frame_type: u16,
         stream: &mut TcpStream,
-    ) -> Option<Result<(u16, Vec<u8>), Box<dyn Error + Send>>> {
+    ) -> Option<Result<FrameTuple, Box<dyn Error + Send>>> {
         let maybe_result = <H as FrameHandler>::IncomingFrame::parse(frame_type, stream).await;
         if maybe_result.is_none() {
             // This handler does not want to handle this frame.
@@ -80,8 +82,8 @@ impl Error for EndpointError {}
 pub struct Endpoint {
     stream: TcpStream,
     handlers: Vec<Box<dyn AnyFrameHandler + Send>>,
-    tx: Sender<(u16, Vec<u8>)>,
-    rx: Option<Receiver<(u16, Vec<u8>)>>,
+    tx: Sender<FrameTuple>,
+    rx: Option<Receiver<FrameTuple>>,
 }
 
 impl Endpoint {
@@ -103,7 +105,7 @@ impl Endpoint {
         self.handlers.push(Box::new(type_erased_handler));
     }
 
-    pub fn get_mailbox(&self) -> Sender<(u16, Vec<u8>)> {
+    pub fn get_mailbox(&self) -> Sender<FrameTuple> {
         return self.tx.clone();
     }
 }
@@ -112,26 +114,37 @@ impl Endpoint {
     pub async fn run(&mut self) -> Result<(), Box<dyn Error>> {
         let mut rx = self.rx.take().unwrap();
         loop {
-            let send_frame = select! {
-                frame = self.handle_incoming_frames() => frame.ok(),
-                frame = rx.recv() => frame,
+            let send_frame: Result<FrameTuple, _> = select! {
+                frame = self.handle_incoming_frames() => frame,
+                frame = rx.recv() => Ok(frame.unwrap()),
             };
-            if let Some(send_frame) = send_frame {
-                let mut frame_type_buf = [0 as u8; 2];
-                LittleEndian::write_u16(&mut frame_type_buf, send_frame.0);
 
-                println!("sending frame with type {}", send_frame.0);
-
-                // TODO: add error handling.
-                let _ = self.stream.write_all(&frame_type_buf).await;
-                let _ = self.stream.write_all(&send_frame.1).await;
+            if send_frame.is_err() {
+                return Err(send_frame.unwrap_err());
             }
+
+            let send_frame = send_frame.unwrap();
+            let mut frame_type_buf = [0 as u8; 2];
+            LittleEndian::write_u16(&mut frame_type_buf, send_frame.0);
+
+            println!("sending frame with type {}", send_frame.0);
+
+            // TODO: add error handling.
+            let _ = self.stream.write_all(&frame_type_buf).await;
+            let _ = self.stream.write_all(&send_frame.1).await;
         }
     }
 
-    async fn handle_incoming_frames(&mut self) -> Result<(u16, Vec<u8>), Box<dyn Error>> {
+    async fn handle_incoming_frames(&mut self) -> Result<FrameTuple, Box<dyn Error + Send>> {
         let mut frame_type_buf = [0 as u8; 2];
-        let _ = self.stream.read_exact(&mut frame_type_buf).await;
+        let read_size = self.stream.read_exact(&mut frame_type_buf).await;
+        if let Ok(read_size) = read_size {
+            if read_size != 2 {
+                return Err(Box::new(EndpointError::new("Peer has closed unexpectedly")));
+            }
+        } else {
+            return Err(Box::new(read_size.unwrap_err()));
+        }
 
         let frame_type = LittleEndian::read_u16(&frame_type_buf);
 

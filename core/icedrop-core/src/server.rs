@@ -1,5 +1,5 @@
 use crate::endpoint::Endpoint;
-use crate::handlers::HandshakeHandler;
+use crate::handlers::{file_transfer::FileTransferReceivingHandler, handshake::HandshakeHandler};
 
 use tokio::io::Result;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -36,6 +36,7 @@ impl Server {
         Handle::current().spawn(async {
             let mut endpoint = Endpoint::new(stream);
             endpoint.add_handler(HandshakeHandler);
+            endpoint.add_handler(FileTransferReceivingHandler::new("/var/tmp/icedrop").await);
             let result = endpoint.run().await;
             if let Some(err) = result.err() {
                 println!("error happened while serving a client: {:?}", err);

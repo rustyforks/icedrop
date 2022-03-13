@@ -1,13 +1,15 @@
+use tokio::fs::File;
 use tokio::io::Result;
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::runtime::Handle;
 
 use crate::endpoint::Endpoint;
-use crate::handlers::HandshakeRequestFrame;
+use crate::handlers::{file_transfer::FileTransferNextHandler, handshake::HandshakeRequestFrame};
 use crate::proto::Frame;
 
 pub struct Client {
     stream: Option<TcpStream>,
+    file: Option<File>,
 }
 
 impl Client {
@@ -19,11 +21,19 @@ impl Client {
 
         Ok(Self {
             stream: Some(stream),
+            file: None,
         })
+    }
+
+    pub fn set_file(&mut self, file: File) {
+        self.file = Some(file);
     }
 
     pub async fn run(&mut self) {
         let mut endpoint = Endpoint::new(self.stream.take().unwrap());
+
+        let file = self.file.take().unwrap();
+        endpoint.add_handler(FileTransferNextHandler::new(file));
 
         let mailbox = endpoint.get_mailbox();
         Handle::current().spawn(async move {
@@ -47,6 +57,7 @@ impl Client {
 mod tests {
     use super::Client;
 
+    use tokio::fs::File;
     use tokio::io::Result;
     use tokio::runtime::Runtime;
 
@@ -54,7 +65,13 @@ mod tests {
     fn simple_test() {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
+            let file =
+                File::open("/Users/cyandev/Downloads/rk3399-sd-friendlywrt-5.15-20220125.img")
+                    .await?;
+            // let file = File::open("/Users/cyandev/Downloads/Detroit Become Human.mp4").await?;
+
             let mut client = Client::connect("127.0.0.1:8080").await?;
+            client.set_file(file);
             client.run().await;
             Result::Ok(())
         })

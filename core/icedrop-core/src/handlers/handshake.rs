@@ -1,4 +1,5 @@
-use crate::proto::{Frame, FrameHandler, Stream};
+use super::utils::checked_read_exact;
+use crate::proto::{Frame, FrameHandler, StreamReadHalf};
 
 use std::error::Error;
 
@@ -21,20 +22,20 @@ impl Frame for HandshakeRequestFrame {
         stream: &mut S,
     ) -> Option<Result<Self, Box<dyn Error + Send>>>
     where
-        S: Stream,
+        S: StreamReadHalf,
     {
         if frame_type != 1 {
             return None;
         }
 
         let mut size_buf = [0 as u8; 4];
-        let _ = stream.read_exact(&mut size_buf).await;
+        checked_read_exact!(stream, &mut size_buf);
 
         let size = LittleEndian::read_u32(&size_buf) as usize;
 
         let mut name_buf = Vec::<u8>::with_capacity(size);
         name_buf.resize(size, 0);
-        let _ = stream.read_exact(&mut name_buf).await;
+        checked_read_exact!(stream, &mut name_buf);
 
         let name_result = String::from_utf8(name_buf);
         if let Ok(name) = name_result {
@@ -71,7 +72,7 @@ impl Frame for HandshakeResponseFrame {
         _stream: &mut S,
     ) -> Option<Result<Self, Box<dyn Error + Send>>>
     where
-        S: Stream,
+        S: StreamReadHalf,
     {
         if frame_type != 2 {
             return None;

@@ -4,7 +4,7 @@ use std::fmt::Debug;
 use async_trait::async_trait;
 use tokio::io::AsyncReadExt;
 
-pub trait Stream: AsyncReadExt + Send + Unpin {}
+pub trait StreamReadHalf: AsyncReadExt + Send + Unpin {}
 
 #[async_trait]
 pub trait Frame: Debug + Send + Sized {
@@ -15,7 +15,7 @@ pub trait Frame: Debug + Send + Sized {
         stream: &mut S,
     ) -> Option<Result<Self, Box<dyn Error + Send>>>
     where
-        S: Stream;
+        S: StreamReadHalf;
 
     fn to_bytes(&self) -> Vec<u8>;
 }
@@ -26,4 +26,25 @@ pub trait FrameHandler {
     type OutgoingFrame: Frame;
 
     async fn handle_frame(&mut self, frame: Self::IncomingFrame) -> Self::OutgoingFrame;
+}
+
+#[async_trait]
+impl Frame for () {
+    fn frame_type(&self) -> u16 {
+        return 0;
+    }
+
+    async fn parse<S>(
+        _frame_type: u16,
+        _stream: &mut S,
+    ) -> Option<Result<Self, Box<dyn Error + Send>>>
+    where
+        S: StreamReadHalf,
+    {
+        None
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        Vec::new()
+    }
 }

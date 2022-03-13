@@ -1,8 +1,9 @@
 use super::handshake::HandshakeResponseFrame;
 use super::session::EndSessionFrame;
-use super::utils::def_frame_selector;
-use crate::proto::{Frame, FrameHandler, Stream};
+use super::utils::{checked_read_exact, def_frame_selector};
+use crate::proto::{Frame, FrameHandler, StreamReadHalf};
 
+use std::time;
 use std::{error::Error, path::Path};
 
 use async_trait::async_trait;
@@ -28,14 +29,14 @@ impl Frame for FileTransferAckFrame {
         stream: &mut S,
     ) -> Option<Result<Self, Box<dyn Error + Send>>>
     where
-        S: Stream,
+        S: StreamReadHalf,
     {
         if frame_type != 4 {
             return None;
         }
 
         let mut segment_idx_buf = [0 as u8; 4];
-        let _ = stream.read_exact(&mut segment_idx_buf).await;
+        checked_read_exact!(stream, &mut segment_idx_buf);
 
         let segment_idx = LittleEndian::read_u32(&segment_idx_buf);
 
@@ -83,17 +84,17 @@ impl Frame for FileTransferDataFrame {
         stream: &mut S,
     ) -> Option<Result<Self, Box<dyn Error + Send>>>
     where
-        S: Stream,
+        S: StreamReadHalf,
     {
         if frame_type != 3 {
             return None;
         }
 
         let mut segment_idx_buf = [0 as u8; 4];
-        let _ = stream.read_exact(&mut segment_idx_buf).await;
+        checked_read_exact!(stream, &mut segment_idx_buf);
 
         let mut chunk_size_buf = [0 as u8; 4];
-        let _ = stream.read_exact(&mut chunk_size_buf).await;
+        checked_read_exact!(stream, &mut chunk_size_buf);
 
         let segment_idx = LittleEndian::read_u32(&segment_idx_buf);
         let chunk_size = LittleEndian::read_u32(&chunk_size_buf) as usize;
@@ -184,6 +185,8 @@ impl FrameHandler for FileTransferNextHandler {
 
 pub struct FileTransferReceivingHandler {
     file: File,
+    #[cfg(debug_assertions)]
+    last_recv_timestamp: Option<time::Instant>,
 }
 
 impl FileTransferReceivingHandler {
@@ -193,7 +196,11 @@ impl FileTransferReceivingHandler {
     {
         let file_path = path.as_ref().join("test");
         let file = File::create(file_path).await.unwrap();
-        Self { file }
+        Self {
+            file,
+            #[cfg(debug_assertions)]
+            last_recv_timestamp: None,
+        }
     }
 }
 
@@ -203,10 +210,20 @@ impl FrameHandler for FileTransferReceivingHandler {
     type OutgoingFrame = FileTransferAckOrEndFrame;
 
     async fn handle_frame(&mut self, frame: Self::IncomingFrame) -> Self::OutgoingFrame {
-        println!(
-            "receive data frame: {} ({} bytes)",
-            frame.segment_idx, frame.chunk_size
-        );
+        #[cfg(debug_assertions)]
+        {
+            let now = time::Instant::now();
+            let speed = if let Some(ts) = self.last_recv_timestamp {
+                (frame.chunk_size as f64 / 1048576_f64) / (now - ts).as_secs_f64()
+            } else {
+                0_f64
+            };
+            self.last_recv_timestamp = Some(now);
+            println!(
+                "receive data frame: {} ({} bytes, {:.2} MB/s)",
+                frame.segment_idx, frame.chunk_size, speed
+            );
+        }
 
         if frame.chunk_size == 0 {
             self.file.flush().await.unwrap();

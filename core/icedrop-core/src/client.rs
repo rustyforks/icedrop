@@ -3,7 +3,8 @@ use tokio::io::Result;
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::runtime::Handle;
 
-use crate::endpoint::Endpoint;
+use crate::endpoint::{ControlMessage, Endpoint};
+use crate::handlers::session::EndSessionHandler;
 use crate::handlers::{file_transfer::FileTransferNextHandler, handshake::HandshakeRequestFrame};
 use crate::proto::Frame;
 
@@ -34,6 +35,7 @@ impl Client {
 
         let file = self.file.take().unwrap();
         endpoint.add_handler(FileTransferNextHandler::new(file));
+        endpoint.add_handler(EndSessionHandler::new(endpoint.get_mailbox()));
 
         let mailbox = endpoint.get_mailbox();
         Handle::current().spawn(async move {
@@ -41,7 +43,10 @@ impl Client {
                 name: "test".to_owned(),
             };
             mailbox
-                .send((frame.frame_type(), frame.to_bytes()))
+                .send(ControlMessage::SendFrame((
+                    frame.frame_type(),
+                    frame.to_bytes(),
+                )))
                 .await
                 .unwrap();
         });
@@ -65,10 +70,7 @@ mod tests {
     fn simple_test() {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let file =
-                File::open("/Users/cyandev/Downloads/rk3399-sd-friendlywrt-5.15-20220125.img")
-                    .await?;
-            // let file = File::open("/Users/cyandev/Downloads/Detroit Become Human.mp4").await?;
+            let file = File::open("/Users/cyandev/Downloads/Detroit Become Human.mp4").await?;
 
             let mut client = Client::connect("127.0.0.1:8080").await?;
             client.set_file(file);

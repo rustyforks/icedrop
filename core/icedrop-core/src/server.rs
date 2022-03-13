@@ -56,7 +56,7 @@ mod tests {
     fn simple_test() {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let mut server = Server::bind("127.0.0.1:8080").await?;
+            let mut server = Server::bind("0.0.0.0:8080").await?;
             server.run().await;
             Result::Ok(())
         })

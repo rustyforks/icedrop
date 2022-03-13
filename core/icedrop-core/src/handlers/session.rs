@@ -1,8 +1,12 @@
-use crate::proto::{Frame, Stream};
+use crate::{
+    endpoint::ControlMessage,
+    proto::{Frame, FrameHandler, StreamReadHalf},
+};
 
 use std::error::Error;
 
 use async_trait::async_trait;
+use tokio::sync::mpsc::Sender;
 
 #[derive(Debug)]
 pub struct EndSessionFrame;
@@ -18,7 +22,7 @@ impl Frame for EndSessionFrame {
         _stream: &mut S,
     ) -> Option<Result<Self, Box<dyn Error + Send>>>
     where
-        S: Stream,
+        S: StreamReadHalf,
     {
         if frame_type != 99 {
             return None;
@@ -29,5 +33,28 @@ impl Frame for EndSessionFrame {
 
     fn to_bytes(&self) -> Vec<u8> {
         Vec::new()
+    }
+}
+
+pub struct EndSessionHandler {
+    endpoint_mailbox: Sender<ControlMessage>,
+}
+
+impl EndSessionHandler {
+    pub fn new(endpoint_mailbox: Sender<ControlMessage>) -> Self {
+        Self { endpoint_mailbox }
+    }
+}
+
+#[async_trait]
+impl FrameHandler for EndSessionHandler {
+    type IncomingFrame = EndSessionFrame;
+    type OutgoingFrame = ();
+
+    async fn handle_frame(&mut self, _frame: Self::IncomingFrame) -> Self::OutgoingFrame {
+        self.endpoint_mailbox
+            .send(ControlMessage::Shutdown)
+            .await
+            .unwrap();
     }
 }

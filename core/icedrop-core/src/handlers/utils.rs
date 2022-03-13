@@ -1,3 +1,11 @@
+macro_rules! checked_read_exact {
+    ($stream:ident, $buf:expr) => {
+        if let Err(e) = $stream.read_exact($buf).await {
+            return Some(Err(Box::new(e)));
+        }
+    };
+}
+
 macro_rules! def_frame_selector {
     ($name:ident, $($frame_ty:ident),+) => {
         #[derive(Debug)]
@@ -22,7 +30,7 @@ macro_rules! def_frame_selector {
                 stream: &mut S,
             ) -> Option<Result<Self, Box<dyn Error + Send>>>
             where
-                S: Stream,
+                S: StreamReadHalf,
             {
                 $(
                     if let Some(frame) = $frame_ty::parse(frame_type, stream).await {
@@ -44,4 +52,5 @@ macro_rules! def_frame_selector {
     };
 }
 
+pub(super) use checked_read_exact;
 pub(super) use def_frame_selector;

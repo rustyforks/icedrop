@@ -129,9 +129,16 @@ impl Frame for FileTransferDataFrame {
     }
 }
 
+pub enum FileTransferEvent {
+    SegmentSent(u32, usize),
+    Complete,
+}
+
 pub struct FileTransferNextHandler {
     file: File,
     cur_segment: u32,
+    bytes_sent: usize,
+    callback_fn: Option<Box<dyn Fn(FileTransferEvent) + Send>>,
 }
 
 impl FileTransferNextHandler {
@@ -139,7 +146,16 @@ impl FileTransferNextHandler {
         Self {
             file,
             cur_segment: 1,
+            bytes_sent: 0,
+            callback_fn: None,
         }
+    }
+
+    pub fn set_callback_fn<F>(&mut self, f: F)
+    where
+        F: Fn(FileTransferEvent) + Send + 'static,
+    {
+        self.callback_fn = Some(Box::new(f));
     }
 }
 
@@ -153,6 +169,14 @@ impl FrameHandler for FileTransferNextHandler {
             if frame.segment_idx != self.cur_segment {
                 panic!("Unexpected next segment.");
             }
+        }
+
+        // Invoke event callback if necessary.
+        if let Some(fn_box) = &mut self.callback_fn {
+            fn_box.call((FileTransferEvent::SegmentSent(
+                self.cur_segment - 1,
+                self.bytes_sent,
+            ),));
         }
 
         // Read the file as much as possible (within the chunk size limit).
@@ -172,8 +196,17 @@ impl FrameHandler for FileTransferNextHandler {
         // Resize the buffer to the final read size.
         buf.resize(total_read_size, 0);
 
+        // Invoke event callback with complete event when there is no more data to send.
+        if total_read_size == 0 {
+            if let Some(fn_box) = &mut self.callback_fn {
+                fn_box.call((FileTransferEvent::Complete,));
+            }
+        }
+
         let segment_idx = self.cur_segment;
         self.cur_segment += 1;
+
+        self.bytes_sent += total_read_size;
 
         FileTransferDataFrame {
             segment_idx,

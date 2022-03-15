@@ -9,6 +9,7 @@ crate-type = ["staticlib"]
 [dependencies]
 log = "0.4"
 env_logger = "0.9.0"
+tokio = { version = "1.14.0", features = ["full"] }
 icedrop-core = { path = "../icedrop-core" }
 
 [build-dependencies]

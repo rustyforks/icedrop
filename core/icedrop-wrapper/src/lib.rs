@@ -1,62 +1,83 @@
+#![feature(fn_traits)]
+#![allow(dead_code)]
+
+mod client;
+
+#[cfg(test)]
+mod tests;
+
 use std::ffi::{c_void, CStr};
+use std::mem::forget;
 use std::os::raw::c_char;
-use std::sync::Mutex;
-use env_logger::{self, Env};
-use icedrop_core::{SenderController, SenderCommand};
 
-struct SenderControllerHandle {
-  inner: Mutex<SenderController>,
-  endpoint: String
+use client::{IcedropClient, SendFileRequest, UserInfoPtr};
+
+/// Creates and returns a new [`IcedropClient`] instance. Must be destroyed
+/// via [`icedrop_client_destroy`] function after usage.
+#[no_mangle]
+pub extern "C" fn icedrop_client_new() -> *mut c_void {
+    let client = Box::new(IcedropClient::new());
+    let client_ptr = Box::leak(client) as *mut IcedropClient;
+    unsafe { std::mem::transmute(client_ptr) }
 }
 
+/// Destroys the given [`IcedropClient`] instance. Must called when the client is not running, it's
+/// always recommended to call this function in the same thread that runs the client.
 #[no_mangle]
-pub extern "C" fn icedrop_logger_init() {
-  env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+pub extern "C" fn icedrop_client_destroy(client: *mut c_void) {
+    let client_ptr = client as *mut IcedropClient;
+    let client = unsafe { Box::from_raw(client_ptr) };
+    drop(client);
 }
 
-/// Creates and returns a new `SenderController` instance. Must be destroyed
-/// via `icedrop_sender_controller_destroy` function after usage.
+/// Runs the client's main loop in caller thread. This function will block until the client is asked
+/// to stop via [`icedrop_client_stop`] function.
 #[no_mangle]
-pub extern "C" fn icedrop_sender_controller_new(endpoint: *const c_char) -> *mut c_void {
-  let endpoint_str = unsafe { CStr::from_ptr(endpoint).to_string_lossy().into_owned() };
-
-  let sender_controller = SenderController::new();
-  let handle = SenderControllerHandle {
-    inner: Mutex::new(sender_controller),
-    endpoint: endpoint_str
-  };
-  let handle_ref = Box::leak(Box::new(handle));
-  return handle_ref as *mut _ as *mut c_void;
+pub extern "C" fn icedrop_client_run_in_current_thread(client: *mut c_void) {
+    let client_ptr = client as *mut IcedropClient;
+    let mut client = unsafe { Box::from_raw(client_ptr) };
+    client.run_in_current_thread();
+    forget(client);
 }
 
-/// Destroys the given `SenderController` instance.
+/// Forces the client to stop running.
+///
+/// Note that the client can still run before this function returns.
 #[no_mangle]
-pub extern "C" fn icedrop_sender_controller_destroy(ptr: *mut c_void) {
-  let _ptr = ptr as *mut SenderControllerHandle;
-  let handle = unsafe { Box::from_raw(_ptr) };
-  drop(handle);
-}
+pub extern "C" fn icedrop_client_stop(client: *mut c_void) {}
 
-/// Enqueues a send file command with given file path.
+/// Initiate an send file request.
 #[no_mangle]
-pub extern "C" fn icedrop_sender_controller_send_file(ptr: *mut c_void, path: *const c_char) {
-  let path_str = unsafe { CStr::from_ptr(path).to_string_lossy().into_owned() };
+pub extern "C" fn icedrop_client_send_file(
+    client: *mut c_void,
+    remote_addr: *const c_char,
+    local_file_path: *const c_char,
+    user_info: *mut c_void,
+    segment_sent_callback: Option<unsafe extern "C" fn(*mut c_void, u32, usize) -> c_void>,
+    completed_callback: Option<unsafe extern "C" fn(*mut c_void) -> c_void>,
+) {
+    let client_ptr = client as *mut IcedropClient;
+    let client = unsafe { Box::from_raw(client_ptr) };
 
-  let _ptr = unsafe { &*(ptr as *mut SenderControllerHandle) };
-  let controller_guard = _ptr.inner.lock().unwrap();
-  controller_guard.dispatch_command(SenderCommand::SendFile(path_str));
-}
+    unsafe {
+        let remote_addr = CStr::from_ptr(remote_addr).to_str().unwrap();
+        let local_file_path = CStr::from_ptr(local_file_path).to_str().unwrap();
 
-/// Enters the main loop of a sender thread. Calling this function will block
-/// the current thread until the sender is closed by commands.
-#[no_mangle]
-pub extern "C" fn icedrop_sender_thread_main(ptr: *mut c_void) {
-  let handle_ref = unsafe { &*(ptr as *mut SenderControllerHandle) };
-  let mut controller_guard = handle_ref.inner.lock().unwrap();
-  let rx = controller_guard.take_command_rx();
-  drop(controller_guard);
+        let mut send_file_req = SendFileRequest::new(remote_addr, local_file_path);
+        send_file_req.user_info = UserInfoPtr(user_info);
+        if let Some(segment_sent_callback) = segment_sent_callback {
+            send_file_req.segment_sent_callback = Some(Box::new(move |arg_0, arg_1, arg_2| {
+                segment_sent_callback(arg_0, arg_1, arg_2);
+            }));
+        }
+        if let Some(completed_callback) = completed_callback {
+            send_file_req.completed_callback = Some(Box::new(move |arg_0| {
+                completed_callback(arg_0);
+            }));
+        }
 
-  let endpoint = handle_ref.endpoint.clone();
+        client.send_request(send_file_req);
+    }
 
-  icedrop_core::sender_main(endpoint, rx);
+    forget(client);
 }

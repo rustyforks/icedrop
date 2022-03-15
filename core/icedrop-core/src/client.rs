@@ -107,7 +107,10 @@ mod tests {
     fn simple_test() {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let file = File::open("/Users/cyandev/Downloads/Detroit Become Human.mp4").await?;
+            let file =
+                File::open("/Users/cyandev/Downloads/rk3399-sd-friendlywrt-5.15-20220125.img")
+                    .await?;
+            // let file = File::open("/Users/cyandev/Downloads/Detroit Become Human.mp4").await?;
 
             let mut client = Client::connect("127.0.0.1:8080").await?;
             client.set_file(file);

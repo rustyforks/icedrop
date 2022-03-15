@@ -6,3 +6,5 @@ mod endpoint;
 mod handlers;
 mod proto;
 mod server;
+
+pub use client::Client;

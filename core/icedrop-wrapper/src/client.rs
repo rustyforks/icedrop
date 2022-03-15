@@ -1,5 +1,7 @@
 use std::ffi::c_void;
-use std::future::Future;
+use std::fs::File as StdFile;
+use std::os::unix::prelude::FromRawFd;
+use std::path::Path;
 
 use tokio::fs::File;
 use tokio::runtime;
@@ -61,21 +63,36 @@ unsafe impl Send for UserInfoPtr {}
 
 pub struct SendFileRequest {
     pub remote_addr: String,
-    pub local_file_path: String,
+    pub file: StdFile,
     pub user_info: UserInfoPtr,
     pub segment_sent_callback: Option<Box<dyn Fn(*mut c_void, u32, usize) + Send>>,
     pub completed_callback: Option<Box<dyn Fn(*mut c_void) + Send>>,
 }
 
 impl SendFileRequest {
-    pub fn new<A, F>(remote_addr: A, local_file_path: F) -> Self
+    pub fn new<A, F>(remote_addr: A, local_file_path: F) -> Result<Self, std::io::Error>
     where
         A: Into<String>,
-        F: Into<String>,
+        F: AsRef<Path>,
     {
+        let file = StdFile::open(local_file_path)?;
+        Ok(SendFileRequest {
+            remote_addr: remote_addr.into(),
+            file,
+            user_info: UserInfoPtr(std::ptr::null_mut()),
+            segment_sent_callback: None,
+            completed_callback: None,
+        })
+    }
+
+    pub fn with_fd<A>(remote_addr: A, file_fd: i32) -> Self
+    where
+        A: Into<String>,
+    {
+        let file = unsafe { StdFile::from_raw_fd(file_fd) };
         SendFileRequest {
             remote_addr: remote_addr.into(),
-            local_file_path: local_file_path.into(),
+            file,
             user_info: UserInfoPtr(std::ptr::null_mut()),
             segment_sent_callback: None,
             completed_callback: None,
@@ -92,14 +109,8 @@ impl ClientRequest for SendFileRequest {
                 return;
             }
 
-            let file = File::open(self.local_file_path).await;
-            if file.is_err() {
-                // TODO: add error handling.
-                return;
-            }
-
             let mut client = client.unwrap();
-            client.set_file(file.unwrap());
+            client.set_file(File::from_std(self.file));
             if let Some(cb) = self.segment_sent_callback {
                 let user_info = self.user_info.clone();
                 client.set_segment_sent_callback(move |segment_idx, bytes_sent| {

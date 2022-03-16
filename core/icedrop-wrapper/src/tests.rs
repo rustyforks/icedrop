@@ -13,8 +13,7 @@ fn simple_test() {
 
     std::thread::spawn(move || {
         let remote_addr = CString::new("127.0.0.1:8080").unwrap();
-        let local_file_path =
-            CString::new("/Users/cyandev/Downloads/Detroit Become Human.mp4").unwrap();
+        let local_file_path = CString::new("/Users/cyandev/Downloads/Docker.dmg").unwrap();
         icedrop_client_send_file(
             client.0,
             remote_addr.as_ptr(),

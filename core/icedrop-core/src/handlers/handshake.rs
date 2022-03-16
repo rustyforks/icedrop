@@ -1,5 +1,8 @@
 use super::utils::checked_read_exact;
-use crate::proto::{Frame, FrameHandler, StreamReadHalf};
+use crate::{
+    endpoint::EndpointHandle,
+    proto::{Frame, FrameHandler, StreamReadHalf},
+};
 
 use std::error::Error;
 
@@ -86,15 +89,25 @@ impl Frame for HandshakeResponseFrame {
     }
 }
 
-pub struct HandshakeHandler;
+pub struct HandshakeHandler {
+    endpoint_handle: EndpointHandle,
+}
+
+impl HandshakeHandler {
+    pub fn new(endpoint_handle: EndpointHandle) -> Self {
+        Self { endpoint_handle }
+    }
+}
 
 #[async_trait]
 impl FrameHandler for HandshakeHandler {
     type IncomingFrame = HandshakeRequestFrame;
-    type OutgoingFrame = HandshakeResponseFrame;
 
-    async fn handle_frame(&mut self, frame: Self::IncomingFrame) -> Self::OutgoingFrame {
+    async fn handle_frame(&mut self, frame: Self::IncomingFrame) {
         println!("{}", frame.name);
-        HandshakeResponseFrame
+        self.endpoint_handle
+            .send_frame(HandshakeResponseFrame)
+            .await
+            .unwrap();
     }
 }

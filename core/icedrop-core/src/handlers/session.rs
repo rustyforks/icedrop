@@ -1,5 +1,5 @@
 use crate::{
-    endpoint::ControlMessage,
+    endpoint::EndpointHandle,
     proto::{Frame, FrameHandler, StreamReadHalf},
 };
 
@@ -37,24 +37,20 @@ impl Frame for EndSessionFrame {
 }
 
 pub struct EndSessionHandler {
-    endpoint_mailbox: Sender<ControlMessage>,
+    endpoint_handle: EndpointHandle,
 }
 
 impl EndSessionHandler {
-    pub fn new(endpoint_mailbox: Sender<ControlMessage>) -> Self {
-        Self { endpoint_mailbox }
+    pub fn new(endpoint_handle: EndpointHandle) -> Self {
+        Self { endpoint_handle }
     }
 }
 
 #[async_trait]
 impl FrameHandler for EndSessionHandler {
     type IncomingFrame = EndSessionFrame;
-    type OutgoingFrame = ();
 
-    async fn handle_frame(&mut self, _frame: Self::IncomingFrame) -> Self::OutgoingFrame {
-        self.endpoint_mailbox
-            .send(ControlMessage::Shutdown)
-            .await
-            .unwrap();
+    async fn handle_frame(&mut self, _frame: Self::IncomingFrame) {
+        self.endpoint_handle.shutdown().await.unwrap();
     }
 }

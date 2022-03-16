@@ -23,9 +23,8 @@ pub trait Frame: Debug + Send + Sized {
 #[async_trait]
 pub trait FrameHandler {
     type IncomingFrame: Frame;
-    type OutgoingFrame: Frame;
 
-    async fn handle_frame(&mut self, frame: Self::IncomingFrame) -> Self::OutgoingFrame;
+    async fn handle_frame(&mut self, frame: Self::IncomingFrame);
 }
 
 #[async_trait]

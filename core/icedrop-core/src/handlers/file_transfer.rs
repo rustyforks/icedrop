@@ -1,6 +1,7 @@
 use super::handshake::HandshakeResponseFrame;
 use super::session::EndSessionFrame;
 use super::utils::{checked_read_exact, def_frame_selector};
+use crate::endpoint::EndpointHandle;
 use crate::proto::{Frame, FrameHandler, StreamReadHalf};
 
 use std::time;
@@ -135,6 +136,7 @@ pub enum FileTransferEvent {
 }
 
 pub struct FileTransferNextHandler {
+    endpoint_handle: EndpointHandle,
     file: File,
     cur_segment: u32,
     bytes_sent: usize,
@@ -142,8 +144,9 @@ pub struct FileTransferNextHandler {
 }
 
 impl FileTransferNextHandler {
-    pub fn new(file: File) -> Self {
+    pub fn new(endpoint_handle: EndpointHandle, file: File) -> Self {
         Self {
+            endpoint_handle,
             file,
             cur_segment: 1,
             bytes_sent: 0,
@@ -162,9 +165,8 @@ impl FileTransferNextHandler {
 #[async_trait]
 impl FrameHandler for FileTransferNextHandler {
     type IncomingFrame = FileTransferNextFrame;
-    type OutgoingFrame = FileTransferDataFrame;
 
-    async fn handle_frame(&mut self, frame: Self::IncomingFrame) -> Self::OutgoingFrame {
+    async fn handle_frame(&mut self, frame: Self::IncomingFrame) {
         if let FileTransferNextFrame::FileTransferAckFrame(frame) = frame {
             if frame.segment_idx != self.cur_segment {
                 panic!("Unexpected next segment.");
@@ -208,28 +210,33 @@ impl FrameHandler for FileTransferNextHandler {
 
         self.bytes_sent += total_read_size;
 
-        FileTransferDataFrame {
-            segment_idx,
-            chunk_size: total_read_size as u32,
-            data: buf,
-        }
+        self.endpoint_handle
+            .send_frame(FileTransferDataFrame {
+                segment_idx,
+                chunk_size: total_read_size as u32,
+                data: buf,
+            })
+            .await
+            .unwrap();
     }
 }
 
 pub struct FileTransferReceivingHandler {
+    endpoint_handle: EndpointHandle,
     file: File,
     #[cfg(debug_assertions)]
     last_recv_timestamp: Option<time::Instant>,
 }
 
 impl FileTransferReceivingHandler {
-    pub async fn new<P>(path: P) -> Self
+    pub async fn new<P>(endpoint_handle: EndpointHandle, path: P) -> Self
     where
         P: AsRef<Path>,
     {
         let file_path = path.as_ref().join("test");
         let file = File::create(file_path).await.unwrap();
         Self {
+            endpoint_handle,
             file,
             #[cfg(debug_assertions)]
             last_recv_timestamp: None,
@@ -240,9 +247,8 @@ impl FileTransferReceivingHandler {
 #[async_trait]
 impl FrameHandler for FileTransferReceivingHandler {
     type IncomingFrame = FileTransferDataFrame;
-    type OutgoingFrame = FileTransferAckOrEndFrame;
 
-    async fn handle_frame(&mut self, frame: Self::IncomingFrame) -> Self::OutgoingFrame {
+    async fn handle_frame(&mut self, frame: Self::IncomingFrame) {
         #[cfg(debug_assertions)]
         {
             let now = time::Instant::now();
@@ -260,13 +266,22 @@ impl FrameHandler for FileTransferReceivingHandler {
 
         if frame.chunk_size == 0 {
             self.file.flush().await.unwrap();
-            return FileTransferAckOrEndFrame::EndSessionFrame(EndSessionFrame);
+            self.endpoint_handle
+                .send_frame(FileTransferAckOrEndFrame::EndSessionFrame(EndSessionFrame))
+                .await
+                .unwrap();
+            return;
         }
 
         self.file.write_all(&frame.data).await.unwrap();
 
-        FileTransferAckOrEndFrame::FileTransferAckFrame(FileTransferAckFrame {
-            segment_idx: frame.segment_idx + 1,
-        })
+        self.endpoint_handle
+            .send_frame(FileTransferAckOrEndFrame::FileTransferAckFrame(
+                FileTransferAckFrame {
+                    segment_idx: frame.segment_idx + 1,
+                },
+            ))
+            .await
+            .unwrap();
     }
 }

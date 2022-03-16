@@ -3,11 +3,10 @@ use tokio::io::Result;
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::runtime::Handle;
 
-use crate::endpoint::{ControlMessage, Endpoint};
+use crate::endpoint::Endpoint;
 use crate::handlers::file_transfer::{FileTransferEvent, FileTransferNextHandler};
 use crate::handlers::handshake::HandshakeRequestFrame;
 use crate::handlers::session::EndSessionHandler;
-use crate::proto::Frame;
 
 pub struct Client {
     stream: Option<TcpStream>,
@@ -53,7 +52,7 @@ impl Client {
         let mut endpoint = Endpoint::new(self.stream.take().unwrap());
 
         let file = self.file.take().unwrap();
-        let mut file_transfer_next_handler = FileTransferNextHandler::new(file);
+        let mut file_transfer_next_handler = FileTransferNextHandler::new(endpoint.handle(), file);
         let segment_sent_callback = self.segment_sent_callback.take();
         let complete_callback = self.complete_callback.take();
         if segment_sent_callback.is_some() || complete_callback.is_some() {
@@ -72,20 +71,14 @@ impl Client {
         }
         endpoint.add_handler(file_transfer_next_handler);
 
-        endpoint.add_handler(EndSessionHandler::new(endpoint.get_mailbox()));
+        endpoint.add_handler(EndSessionHandler::new(endpoint.handle()));
 
-        let mailbox = endpoint.get_mailbox();
+        let endpoint_handle = endpoint.handle();
         Handle::current().spawn(async move {
             let frame = HandshakeRequestFrame {
                 name: "test".to_owned(),
             };
-            mailbox
-                .send(ControlMessage::SendFrame((
-                    frame.frame_type(),
-                    frame.to_bytes(),
-                )))
-                .await
-                .unwrap();
+            endpoint_handle.send_frame(frame).await.unwrap();
         });
 
         let result = endpoint.run().await;

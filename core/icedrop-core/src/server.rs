@@ -35,8 +35,11 @@ impl Server {
     fn serve_client(stream: TcpStream) {
         Handle::current().spawn(async {
             let mut endpoint = Endpoint::new(stream);
-            endpoint.add_handler(HandshakeHandler);
-            endpoint.add_handler(FileTransferReceivingHandler::new("/var/tmp/icedrop").await);
+            endpoint.add_handler(HandshakeHandler::new(endpoint.handle()));
+            let endpoint_handle = endpoint.handle();
+            endpoint.add_handler(
+                FileTransferReceivingHandler::new(endpoint_handle, "/var/tmp/icedrop").await,
+            );
             let result = endpoint.run().await;
             if let Some(err) = result.err() {
                 println!("error happened while serving a client: {:?}", err);

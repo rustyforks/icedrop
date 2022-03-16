@@ -15,12 +15,6 @@ use tokio::sync::Mutex;
 
 type FrameTuple = (u16, Vec<u8>);
 
-#[derive(Debug)]
-pub enum ControlMessage {
-    SendFrame(FrameTuple),
-    Shutdown,
-}
-
 impl StreamReadHalf for OwnedReadHalf {}
 
 #[async_trait]
@@ -88,12 +82,41 @@ impl Display for EndpointError {
 }
 
 impl Error for EndpointError {}
+
+#[derive(Debug)]
+enum EndpointControlMessage {
+    SendFrame(FrameTuple),
+    Shutdown,
+}
+
+pub struct EndpointHandle {
+    tx: Sender<EndpointControlMessage>,
+}
+
+impl EndpointHandle {
+    pub async fn send_frame<F>(&self, frame: F) -> Result<(), Box<dyn Error>>
+    where
+        F: Frame,
+    {
+        let buf = frame.to_bytes();
+        self.tx
+            .send(EndpointControlMessage::SendFrame((frame.frame_type(), buf)))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn shutdown(&self) -> Result<(), Box<dyn Error>> {
+        self.tx.send(EndpointControlMessage::Shutdown).await?;
+        Ok(())
+    }
+}
+
 pub struct Endpoint {
     stream_rd: Arc<Mutex<OwnedReadHalf>>,
     stream_wr: Arc<Mutex<OwnedWriteHalf>>,
     handlers: Option<Vec<Box<dyn AnyFrameHandler + Send>>>,
-    tx: Sender<ControlMessage>,
-    rx: Option<Receiver<ControlMessage>>,
+    tx: Sender<EndpointControlMessage>,
+    rx: Option<Receiver<EndpointControlMessage>>,
 }
 
 impl Endpoint {
@@ -122,8 +145,10 @@ impl Endpoint {
         }
     }
 
-    pub fn get_mailbox(&self) -> Sender<ControlMessage> {
-        return self.tx.clone();
+    pub fn handle(&self) -> EndpointHandle {
+        EndpointHandle {
+            tx: self.tx.clone(),
+        }
     }
 }
 
@@ -150,11 +175,11 @@ impl Endpoint {
             loop {
                 let msg = rx.recv().await.unwrap();
                 match msg {
-                    ControlMessage::SendFrame(frame) => {
+                    EndpointControlMessage::SendFrame(frame) => {
                         let mut stream_wr_locked = stream_wr_clone.lock().await;
                         Self::send_frame(&mut *stream_wr_locked, frame).await;
                     }
-                    ControlMessage::Shutdown => return Ok(()),
+                    EndpointControlMessage::Shutdown => return Ok(()),
                 }
             }
             #[allow(unreachable_code)]

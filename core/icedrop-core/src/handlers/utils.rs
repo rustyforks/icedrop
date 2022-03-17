@@ -1,11 +1,3 @@
-macro_rules! checked_read_exact {
-    ($stream:ident, $buf:expr) => {
-        if let Err(e) = $stream.read_exact($buf).await {
-            return Some(Err(Box::new(e)));
-        }
-    };
-}
-
 macro_rules! def_frame_selector {
     ($name:ident, $($frame_ty:ident),+) => {
         #[derive(Debug)]
@@ -15,7 +7,6 @@ macro_rules! def_frame_selector {
             )+
         }
 
-        #[async_trait]
         impl Frame for $name {
             fn frame_type(&self) -> u16 {
                 match self {
@@ -25,23 +16,21 @@ macro_rules! def_frame_selector {
                 }
             }
 
-            async fn parse<S>(
-                frame_type: u16,
-                stream: &mut S,
-            ) -> Option<Result<Self, Box<dyn Error + Send>>>
-            where
-                S: StreamReadHalf,
-            {
+            fn try_parse(frame_type: u16, buf: Vec<u8>) -> FrameParsingResult<Self> {
                 $(
-                    if let Some(frame) = $frame_ty::parse(frame_type, stream).await {
-                        return Some(Ok(Self::$frame_ty(frame.unwrap())));
+                    let result = $frame_ty::try_parse(frame_type, buf);
+                    if let FrameParsingResult::Ok(frame) = result {
+                        return FrameParsingResult::Ok($name::$frame_ty(frame));
+                    } else if let FrameParsingResult::Err(err) = result {
+                        return FrameParsingResult::Err(err);
                     }
+                    let buf = result.unwrap_buf();
                 )+
 
-                return None;
+                return FrameParsingResult::Skip(buf);
             }
 
-            fn to_bytes(&self) -> Vec<u8> {
+            fn to_bytes(self) -> Vec<u8> {
                 match self {
                     $(
                         $name::$frame_ty(frame) => frame.to_bytes(),
@@ -52,5 +41,4 @@ macro_rules! def_frame_selector {
     };
 }
 
-pub(super) use checked_read_exact;
 pub(super) use def_frame_selector;

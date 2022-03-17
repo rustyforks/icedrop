@@ -1,37 +1,27 @@
 use crate::{
     endpoint::EndpointHandle,
-    proto::{Frame, FrameHandler, StreamReadHalf},
+    proto::{Frame, FrameHandler, FrameParsingResult},
 };
 
-use std::error::Error;
-
 use async_trait::async_trait;
-use tokio::sync::mpsc::Sender;
 
 #[derive(Debug)]
 pub struct EndSessionFrame;
 
-#[async_trait]
 impl Frame for EndSessionFrame {
     fn frame_type(&self) -> u16 {
         return 99;
     }
 
-    async fn parse<S>(
-        frame_type: u16,
-        _stream: &mut S,
-    ) -> Option<Result<Self, Box<dyn Error + Send>>>
-    where
-        S: StreamReadHalf,
-    {
+    fn try_parse(frame_type: u16, buf: Vec<u8>) -> FrameParsingResult<Self> {
         if frame_type != 99 {
-            return None;
+            return FrameParsingResult::Skip(buf);
         }
 
-        Some(Ok(EndSessionFrame))
+        FrameParsingResult::Ok(EndSessionFrame)
     }
 
-    fn to_bytes(&self) -> Vec<u8> {
+    fn to_bytes(self) -> Vec<u8> {
         Vec::new()
     }
 }

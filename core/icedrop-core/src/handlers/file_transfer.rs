@@ -1,11 +1,11 @@
 use super::handshake::HandshakeResponseFrame;
 use super::session::EndSessionFrame;
-use super::utils::{checked_read_exact, def_frame_selector};
+use super::utils::def_frame_selector;
 use crate::endpoint::EndpointHandle;
-use crate::proto::{Frame, FrameHandler, StreamReadHalf};
+use crate::proto::{Frame, FrameHandler, FrameParsingResult};
 
+use std::path::Path;
 use std::time;
-use std::{error::Error, path::Path};
 
 use async_trait::async_trait;
 use byteorder::{ByteOrder, LittleEndian};
@@ -25,26 +25,17 @@ impl Frame for FileTransferAckFrame {
         return 4;
     }
 
-    async fn parse<S>(
-        frame_type: u16,
-        stream: &mut S,
-    ) -> Option<Result<Self, Box<dyn Error + Send>>>
-    where
-        S: StreamReadHalf,
-    {
+    fn try_parse(frame_type: u16, buf: Vec<u8>) -> FrameParsingResult<Self> {
         if frame_type != 4 {
-            return None;
+            return FrameParsingResult::Skip(buf);
         }
 
-        let mut segment_idx_buf = [0 as u8; 4];
-        checked_read_exact!(stream, &mut segment_idx_buf);
+        let segment_idx = LittleEndian::read_u32(&buf);
 
-        let segment_idx = LittleEndian::read_u32(&segment_idx_buf);
-
-        Some(Ok(FileTransferAckFrame { segment_idx }))
+        FrameParsingResult::Ok(FileTransferAckFrame { segment_idx })
     }
 
-    fn to_bytes(&self) -> Vec<u8> {
+    fn to_bytes(self) -> Vec<u8> {
         let mut segment_idx_buf = [0 as u8; 4];
         LittleEndian::write_u32(&mut segment_idx_buf, self.segment_idx);
 
@@ -80,51 +71,35 @@ impl Frame for FileTransferDataFrame {
         return 3;
     }
 
-    async fn parse<S>(
-        frame_type: u16,
-        stream: &mut S,
-    ) -> Option<Result<Self, Box<dyn Error + Send>>>
-    where
-        S: StreamReadHalf,
-    {
+    fn try_parse(frame_type: u16, mut buf: Vec<u8>) -> FrameParsingResult<Self> {
         if frame_type != 3 {
-            return None;
+            return FrameParsingResult::Skip(buf);
         }
 
-        let mut segment_idx_buf = [0 as u8; 4];
-        checked_read_exact!(stream, &mut segment_idx_buf);
+        let segment_idx = LittleEndian::read_u32(&buf[0..4]);
+        let chunk_size = LittleEndian::read_u32(&buf[4..8]) as usize;
 
-        let mut chunk_size_buf = [0 as u8; 4];
-        checked_read_exact!(stream, &mut chunk_size_buf);
-
-        let segment_idx = LittleEndian::read_u32(&segment_idx_buf);
-        let chunk_size = LittleEndian::read_u32(&chunk_size_buf) as usize;
-
-        let mut data = Vec::<u8>::with_capacity(chunk_size);
+        let mut data = buf.split_off(8);
         data.resize(chunk_size, 0);
-        let read_size = stream.read_exact(&mut data).await;
-        if read_size.unwrap() != chunk_size {
-            panic!("Unexpected eof.");
-        }
 
-        Some(Ok(FileTransferDataFrame {
+        FrameParsingResult::Ok(FileTransferDataFrame {
             segment_idx,
             chunk_size: chunk_size as u32,
             data,
-        }))
+        })
     }
 
-    fn to_bytes(&self) -> Vec<u8> {
+    fn to_bytes(self) -> Vec<u8> {
         let mut segment_idx_buf = [0 as u8; 4];
         LittleEndian::write_u32(&mut segment_idx_buf, self.segment_idx);
 
         let mut chunk_size_buf = [0 as u8; 4];
         LittleEndian::write_u32(&mut chunk_size_buf, self.chunk_size);
 
-        let mut buf = Vec::<u8>::with_capacity(4);
+        let mut buf = Vec::<u8>::with_capacity(8 + self.data.len());
         buf.extend(segment_idx_buf);
         buf.extend(chunk_size_buf);
-        buf.extend(&self.data);
+        buf.extend(self.data);
 
         buf
     }

@@ -1,10 +1,7 @@
-use super::utils::checked_read_exact;
 use crate::{
     endpoint::EndpointHandle,
-    proto::{Frame, FrameHandler, StreamReadHalf},
+    proto::{Frame, FrameHandler, FrameParsingResult},
 };
-
-use std::error::Error;
 
 use async_trait::async_trait;
 use byteorder::{ByteOrder, LittleEndian};
@@ -20,36 +17,19 @@ impl Frame for HandshakeRequestFrame {
         return 1;
     }
 
-    async fn parse<S>(
-        frame_type: u16,
-        stream: &mut S,
-    ) -> Option<Result<Self, Box<dyn Error + Send>>>
-    where
-        S: StreamReadHalf,
-    {
+    fn try_parse(frame_type: u16, buf: Vec<u8>) -> FrameParsingResult<Self> {
         if frame_type != 1 {
-            return None;
+            return FrameParsingResult::Skip(buf);
         }
 
-        let mut size_buf = [0 as u8; 4];
-        checked_read_exact!(stream, &mut size_buf);
-
-        let size = LittleEndian::read_u32(&size_buf) as usize;
-
-        let mut name_buf = Vec::<u8>::with_capacity(size);
-        name_buf.resize(size, 0);
-        checked_read_exact!(stream, &mut name_buf);
-
-        let name_result = String::from_utf8(name_buf);
-        if let Ok(name) = name_result {
-            let frame = HandshakeRequestFrame { name };
-            Some(Ok(frame))
-        } else {
-            Some(Err(Box::new(name_result.unwrap_err())))
-        }
+        let size = LittleEndian::read_u32(&buf) as usize;
+        let name = String::from_utf8_lossy(&buf[4..(4 + size)]);
+        return FrameParsingResult::Ok(Self {
+            name: name.into_owned(),
+        });
     }
 
-    fn to_bytes(&self) -> Vec<u8> {
+    fn to_bytes(self) -> Vec<u8> {
         let mut size_buf = [0 as u8; 4];
         LittleEndian::write_u32(&mut size_buf, self.name.len() as u32);
 
@@ -70,21 +50,15 @@ impl Frame for HandshakeResponseFrame {
         return 2;
     }
 
-    async fn parse<S>(
-        frame_type: u16,
-        _stream: &mut S,
-    ) -> Option<Result<Self, Box<dyn Error + Send>>>
-    where
-        S: StreamReadHalf,
-    {
+    fn try_parse(frame_type: u16, buf: Vec<u8>) -> FrameParsingResult<Self> {
         if frame_type != 2 {
-            return None;
+            return FrameParsingResult::Skip(buf);
         }
 
-        Some(Ok(HandshakeResponseFrame))
+        FrameParsingResult::Ok(HandshakeResponseFrame)
     }
 
-    fn to_bytes(&self) -> Vec<u8> {
+    fn to_bytes(self) -> Vec<u8> {
         Vec::new()
     }
 }

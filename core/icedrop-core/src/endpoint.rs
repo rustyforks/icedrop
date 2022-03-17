@@ -145,6 +145,15 @@ impl EndpointHandle {
     }
 }
 
+impl Clone for EndpointHandle {
+    fn clone(&self) -> Self {
+        Self {
+            stream_wr: Arc::clone(&self.stream_wr),
+            shutdown_tx: self.shutdown_tx.clone(),
+        }
+    }
+}
+
 pub struct Endpoint {
     stream_rd: Arc<Mutex<OwnedReadHalf>>,
     stream_wr: Arc<Mutex<OwnedWriteHalf>>,
